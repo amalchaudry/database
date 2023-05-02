@@ -99,7 +99,7 @@ create procedure add_person (in ip_personID varchar(50), in ip_first_name varcha
     in ip_experience integer, in ip_flying_airline varchar(50), in ip_flying_tail varchar(50),
     in ip_miles integer)
 sp_main: begin
-	if ((ip_taxID is NULL or ip_experience) is NULL and ip_miles is NULL) 
+	if ((ip_taxID is NULL or ip_experience is NULL) and ip_miles is NULL) 
 		then leave sp_main;
 	end if;
 
@@ -241,6 +241,11 @@ sp_main: begin
     if exists (select * from route where routeID = ip_routeID) then
         leave sp_main;
     end if;
+    
+    if not exists (select * from leg where legID = ip_legID) then
+		leave sp_main;
+	end if;
+    
     -- route only has the routeID field to set that to ip_routeID
     -- in route_path, for the same routeID created in route, set the legID to ip_legID and the the sequence to 1
     insert into route (routeID) values (ip_routeID);
@@ -318,30 +323,34 @@ drop procedure if exists flight_takeoff;
 delimiter //
 create procedure flight_takeoff (in ip_flightID varchar(50))
 sp_main: begin
-set @flying_tail = (select support_tail from flight where flightID = ip_flightID);
-set @distance = (select distance
- from route_path join leg on route_path.legID = leg.legID
- where routeID = (select routeID from flight where flightID = ip_flightID)
- and sequence = ((select progress from flight where flightID = ip_flightID) + 1));
+	if exists (select * from flight where flightID = ip_flightID and flight.airplane_status = 'in_flight') then
+		leave sp_main;
+	end if;
 
-set @speed = (select speed from airplane where tail_num = 
-(select support_tail from flight where flightID = ip_flightID));
+	set @flying_tail = (select support_tail from flight where flightID = ip_flightID);
+	set @distance = (select distance
+	 from route_path join leg on route_path.legID = leg.legID
+	 where routeID = (select routeID from flight where flightID = ip_flightID)
+	 and sequence = ((select progress from flight where flightID = ip_flightID) + 1));
 
-set @next_time = @distance / @speed;
-set @flight_time = sec_to_time(@next_time* 3600);
+	set @speed = (select speed from airplane where tail_num = 
+	(select support_tail from flight where flightID = ip_flightID));
 
-set @nt = (select next_time from flight where flightID = ip_flightID);
+	set @next_time = @distance / @speed;
+	set @flight_time = sec_to_time(@next_time* 3600);
 
-set @plane_type = (select plane_type from airplane where tail_num = @flying_tail);
-set @assigned_pilots = (select count(*) from pilot where flying_tail = @flying_tail);
-if (@plane_type = 'jet' and @assigned_pilots >= 2) or (@plane_type = 'prop' and @assigned_pilots >= 1) then
-    UPDATE flight SET next_time = ADDTIME(@flight_time, @nt),
-    progress = progress + 1,
-    airplane_status = 'in_flight'
-    where flightID = ip_flightID;
-else 
-    set @delay_time = sec_to_time(1800);
-    UPDATE flight SET next_time = ADDTIME(@delay_time, @nt);
+	set @nt = (select next_time from flight where flightID = ip_flightID);
+
+	set @plane_type = (select plane_type from airplane where tail_num = @flying_tail);
+	set @assigned_pilots = (select count(*) from pilot where flying_tail = @flying_tail);
+	if (@plane_type = 'jet' and @assigned_pilots >= 2) or (@plane_type = 'prop' and @assigned_pilots >= 1) then
+		UPDATE flight SET next_time = ADDTIME(@flight_time, @nt),
+		progress = progress + 1,
+		airplane_status = 'in_flight'
+		where flightID = ip_flightID;
+	else 
+		set @delay_time = sec_to_time(1800);
+		UPDATE flight SET next_time = ADDTIME(@delay_time, @nt);
 end if;
 end //
 delimiter ;
@@ -357,7 +366,7 @@ drop procedure if exists passengers_board;
 delimiter //
 create procedure passengers_board (in ip_flightID varchar(50))
 sp_main: begin
-    if exists (select * from flight where flightID = ip_flightID) then
+    if exists (select * from flight where flightID = ip_flightID and flight.airplane_status != 'in_flight') then
         update person
         set locationID = (select locationID from airplane where tail_num = (select support_tail from flight where flightID = ip_flightID))
         where personID in (select customer from ticket where carrier = ip_flightID) and locationID in
